@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import pandas as pd
+import argparse
+
+
+def main():
+    aparser = argparse.ArgumentParser(description=("Concatenate multiple serialized"
+        " dataframes into a single expanded dataframe ."))
+    aparser.add_argument('--outfile', '-o', required=True, help=("Output "
+        "filename "))
+    aparser.add_argument('dfnames', nargs='*', help="One or more pickled "
+        "dataframes to merge")
+    args = aparser.parse_args()
+
+    data = pd.DataFrame().set_flags(allows_duplicate_labels=False)
+    memsum = 0
+    for dfname in args.dfnames:
+        print(f"Reading {dfname}...")
+        df = pd.read_pickle(dfname) 
+        print(df.shape)
+        data = pd.concat([data, df], ignore_index=True)
+        del(df)
+   
+    data.to_pickle(args.outfile)
+
+if __name__ == "__main__":
+    main()
+

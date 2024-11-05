@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+
+import argparse
+from Bio import SeqIO
+from collections import Counter
+
+aparser = argparse.ArgumentParser(description=("Filter alignment based on percent coverage"))
+
+aparser.add_argument('-a', "--alignment", required=True, help="Alignment file in FASTA format.")
+aparser.add_argument('-c', "--coverage", required=True,  type=float, help="Coverage fraction. i.e. 0.70 == 70% coverage to human.")
+aparser.add_argument('-o', "--outfile", required=True, help="Output file to receive filtered alignment")
+
+args = aparser.parse_args()
+
+with open(args.alignment, 'r') as f:
+    records = list(SeqIO.parse(f, "fasta"))
+
+humrec = records[0]
+humseq = humrec.seq
+hum_aln_length = len(humseq) - Counter(humseq)['-']
+
+bac_records = records[1:]
+
+
+def coverage(rec, hum_rec):
+    '''Determine number of common non-gap locations between bac seq and human
+    seq.'''
+    hum_aln_length = len(hum_rec.seq) - Counter(humseq)['-']
+    comcount = 0
+    for i, sym in enumerate(rec):
+        if rec.seq[i] != '-' and humseq[i] != '-':
+            comcount += 1
+    return comcount / hum_aln_length
+
+# Filter out sequences with less than 'coverage' to human sequence.
+newaln = [ rec for rec in bac_records if coverage(rec, humrec) >= args.coverage ]
+
+
+# Calculate total non-alignment fraction against a reference record.
+def non_alignment(rec, hum_rec):
+    ref_length = len(hum_rec.seq)
+    alncount = 0
+    for i, sym in enumerate(rec):
+        if rec.seq[i] != '-' and humseq[i] == '-':
+            alncount += 1
+    return alncount / ref_length
+
+# Keep only sequences with less than 40% non-alignment with human.
+newaln = [ rec for rec in newaln if non_alignment(rec, humrec) <= 0.40 ]
+
+
+newaln.insert(0, humrec)
+with open(args.outfile, 'w') as of:
+    SeqIO.write(newaln, of, "fasta")
+

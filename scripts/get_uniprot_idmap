@@ -1,0 +1,12 @@
+# Download the human-specific protein ID mapping table from Uniprot along with a README
+# file describing the format of the contents.
+
+mapfile="HUMAN_9606_idmapping.dat.gz"
+
+curl https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/by_organism/${mapfile} --output data/raw/${mapfile}
+
+curl https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/README --ouput data/raw/HUMAN_9606_idmapping_README.txt
+
+pushd data/raw
+gunzip ${mapfile}
+popd

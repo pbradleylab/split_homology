@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+genomes_type=$1
+dest_dir=$2
+
+mkdir -p $dest_dir/temp
+
+if [ ${genomes_type} == "rep" ]; then
+    url="rsync://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/v1.0/uhgg_catalogue/"
+else
+    url="rsync://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/v1.0/all_genomes"
+fi
+rsync -avzr -m --include='*.gff*' --include='*/' --exclude='*' ${url} ${dest_dir}/temp
+
+# Flatten files into the top-level of the requested directory.
+find ${dest_dir}/temp -name *.gff -exec cp {} ${dest_dir} \;
+rm -rf ${dest_dir}/temp

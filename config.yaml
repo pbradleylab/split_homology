@@ -1,0 +1,23 @@
+cluster:
+  mkdir -p logs/{rule} &&
+  sbatch
+    --parsable
+    --cpus-per-task={threads}
+    --job-name=smk-{rule}-{wildcards}
+    --output=logs/{rule}/{rule}-{wildcards}-%j.out
+    --time={resources.time}
+    --partition={resources.partition}
+    --mem={resources.mem_mb}
+default-resources:
+  - time="20:00:00"
+  - partition=bradley
+max-jobs-per-second: 10
+max-status-checks-per-second: 1
+latency-wait: 60
+jobs: 10
+keep-going: True
+rerun-incomplete: True
+printshellcmds: True
+scheduler: greedy
+use-conda: True
+conda-frontend: mamba 
