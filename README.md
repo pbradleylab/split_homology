@@ -13,7 +13,7 @@ conda env create --name xenobiotics --file=xenobiotics.yml
 conda activate xenobiotics
 ```
 
-## Usage
+## Usage and configuration
 
 To run this pipeline with default settings, you can use the "run" wrapper provided:
 
@@ -21,9 +21,9 @@ To run this pipeline with default settings, you can use the "run" wrapper provid
 ./run all
 ```
 
-This wrapper assumes that you are running the pipeling on a SLURM cluster and uses the Snakemake profile in the directory smk_profile/. This profile is optimized for the [OSC](https://www.osc.edu) Cardinal cluster, so if you are running on a different cluster you will likely have to provide your own profile or edit `smk_profile/config.yaml`.
+This wrapper uses the Snakemake profile at `smk_profile/config.yaml`. By default, this is symlinked to `smk_profile/osc.yaml`, a profile optimized for the [OSC](https://www.osc.edu) Cardinal cluster, a SLURM system. If you are running on a different cluster, you will likely have to provide your own profile or edit `smk_profile/config.yaml`.
 
-Alternatively, you can run the pipeline locally:
+Alternatively, you can run the pipeline locally with the following wrapper:
 
 ```
 ./local_run all
@@ -49,37 +49,38 @@ Snakemake pipelines are structured as a sequence of rules that generate final or
 
 A description of the individual rules follows, along with the scripts or programs they call (see `./scripts/`) and whether they are necessary for the full-length/split homologs or both:
 
-| **Rule** | **Scripts/Programs** | **Description** | **Full/Split** | Notes |
-| --- | --- | --- | --- | --- |
-| **get_uhgg_gffs** | `scripts/get_uhgg_gffs.py` | Download UHGG GFF files from MGnify. | split | [^1] |
-| **get_uhgg_metadata** | `curl` | Download UHGG metadata from MGnify. | both | |
-| **split_search_queries** | `scripts/split_fasta.py` | Split UHGP fasta file into chunks. | both | |
-| **search_in_targets** | `blastp` | Perform BLAST search per chunk. | both | |
-| **merged_search** | `cat` | Merge BLAST results. | both | |
-| **baclengths** | `scripts/compute_sequence_lengths.py` | Compute lengths of UHGP protein sequences. | both | |
-| **fullbac** | `scripts/fusion_candidates_baclength.py` | Remove hits that do not cover the bacterial protein at the specified cutoff. | both | |
-| **prot_cluster_arrowdb** | `scripts/uhgp_to_arrow.R` | Create [Arrow](https://arrow.apache.org/docs/r/) DB mapping UHGG gene IDs to UHGP protein IDs. | both | |
-| **samegenome** | `scripts/samegenome_polars.py` | Identify UHGP-90 hits that come from the same UHGG genome. | both | |
-| **humcover** | `scripts/humcover_polars.py` | Remove hits (or sets of hits) that do not cover the human protein at the specified cutoff (either jointly or individually). | both | [^2] |
-| **taxonomy_full** | `scripts/fusion_candidates_taxonomy.py` | Add taxonomy information to the results | full | |
-| **location_part** | `scripts/localize_hits` (Python) | Annotate feature numbers, strands, and contig names | part | |
-| **distance_part** | `scripts/distance_polars.py` | For each hit in each genome, compute the distance to the closest hit on the same contig and strand to the same human protein, dropping hits above a threshold (default: 3) | part | |
-| **humcover2** | `scripts/humcover_polars.py` | Repeat humcover step, since some hits have been dropped | part |  |
-| **taxonomy_part** | `scripts/fusion_candidates_taxonomy.py` | Add taxonomy information to the results | part | |
-| **eggnog** | `scripts/annotate_eggnog.py` | Remove hits (or sets of hits) that do not cover the human protein at the specified cutoff (either jointly or individually). | both | |
-| **export** | `scripts/convert_df` (Python) | Export to .tsv | both | |
-| **preprocess** | `scripts/preprocess-large-files.R` | Filter out "suspiciously good" hits and, for full-length hits, output a summary count | both | |
-| **best_hits_only** | `scripts/best_hits_only.py` | Keep only the best hit per genome (only needed for full-length homologs) | full | [^3] |
-| **humcover3** | `scripts/best_hits_only.py` | Run humcover step one final time after filtering out less-good hits and/or likely contaminants | both | [^2] |
+| **Rule** | **Scripts/Programs** | **Description** | **Full/Split** | Notes | Output [^4] |
+| --- | --- | --- | --- | --- | --- |
+| **get_uhgg_gffs** | `scripts/get_uhgg_gffs.py` | Download UHGG GFF files from MGnify. | split |  [^1] | `data/raw/UHGG_srcgenomes_GFFs/*` |
+| **get_uhgg_metadata** | `curl` | Download UHGG metadata from MGnify. | both | | `data/raw/genomes-all_metadata.tsv` |
+| **split_search_queries** | `scripts/split_fasta.py` | Split UHGP fasta file into chunks. | both | | `data/processed/split_search_queries/HumanUPR/UHGP-90_queries/*` |
+| **search_in_targets** | `blastp` | Perform BLAST search per chunk. | both | | `data/processed/search_in_targets/HumanUPR/blast_*.tsv` |
+| **merged_search** | `cat` | Merge BLAST results. | both | | `data/processed/merged_search/HumanUPR/U90_in_HumanUPR_20000tseqs.tsv` |
+| **baclengths** | `scripts/compute_sequence_lengths.py` | Compute lengths of UHGP protein sequences. | both | | `data/processed/baclengths/uhgp-90_lengths.pkl`|
+| **fullbac** | `scripts/fusion_candidates_baclength.py` | Remove hits that do not cover the bacterial protein at the specified cutoff. | both | | `data/processed/fullbac/HumanUPR/HumanUPR_{bac_overlap}_fullbac.pkl` |
+| **prot_cluster_arrowdb** | `scripts/uhgp_to_arrow.R` | Create [Arrow](https://arrow.apache.org/docs/r/) DB mapping UHGG gene IDs to UHGP protein IDs. | both | | `data/processed/samegenome/HumanUPR/HumanUPR_{bac_overlap}_src_20000/samegenome.ipc` |
+| **samegenome** | `scripts/samegenome_polars.py` | Identify UHGP-90 hits that come from the same UHGG genome. | both | | `data/processed/samegenome/HumanUPR/HumanUPR_{bac_overlap}_src_20000/samegenome.ipc` |
+| **humcover** | `scripts/humcover_polars.py` | Remove hits (or sets of hits) that do not cover the human protein at the specified cutoff (either jointly or individually). | both | [^2] | `data/processed/humcover/HumanUPR/HumanUPR_{bac_overlap}_src_20000_{pf}{len}_humcover.ipc` |
+| **taxonomy_full** | `scripts/fusion_candidates_taxonomy.py` | Add taxonomy information to the results | full | | `data/processed/taxonomy/HumanUPR/HumanUPR_{bac_overlap}_src_20000_full{pf}{len}_taxonomy.ipc` |
+| **location_part** | `scripts/localize_hits` (Python) | Annotate feature numbers, strands, and contig names | part | | `data/processed/location/HumanUPR/HumanUPR_{bac_overlap}_src_20000_part{pf}{len}_location.ipc` |
+| **distance_part** | `scripts/distance_polars.py` | For each hit in each genome, compute the distance to the closest hit on the same contig and strand to the same human protein, dropping hits above a threshold (default: 3) | part | | `data/processed/distance/HumanUPR/HumanUPR_{bac_overlap}_src_20000_part{pf}{len}_distance.ipc` |
+| **humcover2** | `scripts/humcover_polars.py` | Repeat humcover step, since some hits have been dropped | part |  | `data/processed/humcover2/HumanUPR/HumanUPR_{bac_overlap}_src_20000_part{pf}{len}_humcover.ipc` |
+| **taxonomy_part** | `scripts/fusion_candidates_taxonomy.py` | Add taxonomy information to the results | part | | `data/processed/taxonomy/HumanUPR/HumanUPR_{bac_overlap}_src_20000_part{pf}{len}_taxonomy.ipc` |
+| **eggnog** | `scripts/annotate_eggnog.py` | Remove hits (or sets of hits) that do not cover the human protein at the specified cutoff (either jointly or individually). | both | | `data/processed/eggnog/HumanUPR/HumanUPR_{bac_overlap}_src_20000_{pf}{len}_eggnog.ipc` |
+| **export** | `scripts/convert_df` (Python) | Export to .tsv | both | | `data/processed/export/HumanUPR/HumanUPR_{bac_overlap}_src_20000_{pf}{len}_eggnog.tsv`|
+| **preprocess** | `scripts/preprocess-large-files.R` | Filter out "suspiciously good" hits and, for full-length hits, output a summary count | both | | `data/processed/preprocess/HumanUPR_{bac_overlap}_src_20000_{len}/{pf}_no_contaminants.ipc` |
+| **best_hits_only** | `scripts/best_hits_only.py` | Keep only the best hit per genome (only needed for full-length homologs) | full | [^3] | `data/processed/bho/HumanUPR_{bac_overlap}_src_20000_{len}/full_no_contaminants.ipc` |
+| **humcover3** | `scripts/best_hits_only.py` | Run humcover step one final time after filtering out less-good hits and/or likely contaminants | both | [^2] | `data/processed/humcover3/HumanUPR_{bac_overlap}_src_20000_{len}/{pf}_humcover3.ipc` |
 
 
 [^1]: Only the split homolog branch of the pipeline requires feature numbers, strands, and contig information from the full GFF files.
 [^2]: The humcover script can be run in either "part" or "full" mode, and has different behavior (either searching for groups of bacterial proteins that jointly, but not individually align to human proteins above the coverage threshold, or for single bacterial proteins that align to human proteins above the coverage threshold).
 [^3]: A dummy version of this rule, `best_hits_only_dummy`, symlinks the necessary file from the "preprocess" step for the split pipeline.
+[^4]: Some paths may be partially determined by the type of analysis run. The variable parts of the path are listed in `{curly_brackets}`. Key: bac_overlap = bacterial overlap threshold; len = human overlap threshold; pf = part/full.
 
 ### Files 
 
-Input files are found in `data/raw` and `data/manual`. Files generated by the pipeline will be placed in `data/processed`.
+Input files, including those downloaded by the pipeline, are found in `data/raw` and `data/manual`. Files generated from these inputs by the pipeline will be placed in `data/processed`.
 
 ## Analysis
 

@@ -3,7 +3,6 @@ import os
 from snakemake.utils import min_version
 min_version("6.15.5")
 
-#himem_slurm_partition = "mib"
 himem_slurm_partition = "hugemem"
 medmem_slurm_partition = "largemem"
 
@@ -12,17 +11,13 @@ medmem_slurm_partition = "largemem"
 localrules:  get_uhgg_gffs, get_rep_to_src_map, get_uhgp90_data, get_uhgg_metadata
 
 
-#TARGETS = ['HPAFDA', 'HPAmetab']
 TARGETS = ['HumanUPR']
 BAC_OVERLAPS = ['0.5', '0.67', '0.75']
-#GENOME_TYPES = ['src', 'rep']  # 'source' vs 'representative' UHGG genomes
 GENOME_TYPES = ['src']
-#COVERAGES = ['part70', 'part80', 'full']
 PARTCOVERAGES = ['part60', 'part70', 'part80']
 FULLCOVERAGES = ['part60', 'full70', 'full80']
 COVERAGES = PARTCOVERAGES + FULLCOVERAGES
-#HITS_THRESHOLDS = ['all', 20000]   # Applied at 'samegenome' step to limit runtime
-HITS_THRESHOLDS = [20000]   # Applied at 'samegenome' step to limit runtime
+HITS_THRESHOLDS = [20000]   # Note: obsolete since we now use all hits
 
 
 # OVERRIDE
