@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import argparse
+import pandas as pd
+import polars as pl
+from copy import deepcopy
+from itertools import combinations
+from Bio import SeqIO
+from multiprocessing import Pool, Manager
+
+aparser = argparse.ArgumentParser(description=("Extract bacterial protein sequences matched against each"
+        " human protein found in search results for use by clustal omega. Output each bacterial sequence "
+        "to a FASTA file in the order in which the sequences appear in the human sequence."))
+
+aparser.add_argument('-d', "--dataframe", help="Pickled data frame containing filtered search hits")
+aparser.add_argument('-b', "--sequences_bac", help="FASTA file containing bacterial protein sequences")
+aparser.add_argument('-g', "--target_seqs", required=True, help="FASTA file of human target sequences.")
+aparser.add_argument('-o', "--outdir", help="Output dir into which sequences will be placed.")
+
+
+args = aparser.parse_args()
+
+os.makedirs(args.outdir, exist_ok=True)
+if args.dataframe.endswith(".ipc"):
+    df = pl.read_ipc(args.dataframe).to_pandas()
+elif args.dataframe.endswith(".pkl"):
+    df = pd.read_pickle(args.dataframe)
+else:
+    raise ValueError
+
+if "src_genome" in df.columns:
+    genomecol = "src_genome"
+elif "g" in df.columns:
+    genomecol = "g"
+else:
+    raise ValueError("no genome column found in input")
+
+# for each set of hits associated with a given human protein, extract all the
+# sequences from the UHGP FASTA file and write them to a new output file for
+# use by cdhit.
+
+hprots = df["hum_protein"].unique()
+
+print("parsing bacterial sequences...", end='')
+sys.stdout.flush()
+bacseqs = {}
+with open(args.sequences_bac, 'r') as bsf:
+    bacseq_data = SeqIO.parse(bsf, "fasta")
+    for rec in bacseq_data:
+        bacseqs[rec.id] = rec
+print("done.")
+sys.stdout.flush()
+
+print("parsing human target sequences...", end='')
+sys.stdout.flush()
+humseqs = {}
+with open(args.target_seqs, 'r') as sf:
+    humseq_data = SeqIO.parse(sf, "fasta")
+    for rec in humseq_data:
+        humseqs[rec.id] = rec
+print("done.")
+sys.stdout.flush()
+
+
+# Sort bacterial sequence IDs by location on human protein
+#  calculate midpoint of BLAST hit (send - start)
+#  store location in a list alongside bac_protein ID
+#  sort by location value
+#  iterate over list to aggregate sequence data
+lcols = ['hum_protein', 'bac_protein', genomecol, 'contig', 'strand', 'featnum', 'bitscore']
+
+
+def featnum_groups(vals):
+    groups = []
+    for i, val in enumerate(vals):
+        if i == 0:
+            group = [val]
+            continue
+        diff = vals[i] - vals[i-1]
+        if diff <= 2:
+            group.append(val)
+        else:  # new group
+            if len(group) > 1:
+                groups.append(group)
+            group = [val]
+    if len(group) > 1:
+        groups.append(group)
+    return groups
+
+
+for grp in df.groupby("hum_protein"):
+    hprot = grp[0]
+    #if ("DPYD" not in hprot) and ("XDH" not in hprot):
+    #if ("HAOX1" not in hprot):
+    #    continue
+    hits = grp[1]
+
+    ## Reduce hits to only the best operon from each genome.
+    ## For each genome, and contig
+
+    records = []
+    # Extract target sequence for human protein ID.
+    # get full key ID from possible partial ID argument
+    keys = list(humseqs.keys())
+    tgt_key = None
+    for key in keys:
+        if hprot == key:
+            tgt_key = key
+            break
+    target_record = humseqs[tgt_key]
+    records.append(target_record)
+
+    for genomegrp in hits.groupby(genomecol):
+        operon_num = 0
+        for contiggrp in genomegrp[1].groupby("contig"):
+            for strandgrp in contiggrp[1].groupby("strand"):
+                operon = None
+                strandhits = strandgrp[1]
+                print("----------------------------------------------------")
+                print(strandhits[lcols])
+                featnums = list(strandhits['featnum'])
+
+                # Group by proximity of feature number.
+                closegroups = featnum_groups(featnums)
+                if closegroups:
+                    for closegroup in closegroups:
+                        print(strandhits[ strandhits['featnum'].isin(closegroup) ][lcols])
+
+                    # If more than one operon candidate was found (closegroups),
+                    # select the operon with the highest bitscore.
+                    print(f"{len(closegroups) = }")
+                    print(closegroups)
+                    bestscore = 0
+                    bestcand = None
+                    for group in closegroups:
+                        op_cand = strandhits[ strandhits['featnum'].isin(group) ]
+                        score = op_cand['bitscore'].sum()
+                        if score > bestscore:
+                            bestscore = score
+                            bestcand = op_cand.copy()
+                    print("bestcand:")
+                    print(bestcand[lcols])
+                    # Order components by appearance within human protein.
+                    #   (sstart + send)/2
+                    bestcand["loc_midpoint"] = (bestcand["sstart"] + bestcand["send"]) / 2
+                    if bestcand['strand'].iloc[0] == "+":
+                        sort_ascending = True
+                    else:
+                        sort_ascending = False
+                    bestcand = bestcand.sort_values("loc_midpoint", ascending=sort_ascending)
+
+                    # Concatenate sequences from this operon candidate
+                    bacids = bestcand['bac_protein'].to_list()
+                    genomeid = bestcand[genomecol].iloc[0]
+                    concat = ""
+                    record = deepcopy(bacseqs[bacids[0]])
+                    # Modify record fields to reflect all operon components
+                    for bacid in bacids[1:]:
+                        record.seq = record.seq + bacseqs[bacid].seq
+                        record.description = f"{record.description} + {bacseqs[bacid].description}"
+                    fid = f"{genomeid}_{operon_num}"
+                    operon_num += 1
+                    record.id = fid
+                    records.append(record)
+
+    # Deduplicate any identical sequences before alignment
+    dedup_records = []
+    unique_seqs = []
+    for rec in records:
+        if rec.seq not in unique_seqs:
+           unique_seqs.append(rec.seq)
+           dedup_records.append(rec)
+
+    print("num records comparison")
+    print(f"{len(records) = }")
+    print(f"{len(dedup_records) = }")
+
+    short_hprot = hprot.split('|')[2].split('_')[0]
+    if len(dedup_records) < 3:
+        print(f"Insufficient sequences remain after filtering for {short_hprot}.")
+        print("No output file produced.")
+        continue
+    outfile = os.path.join(args.outdir, f"{short_hprot}_and_opcands.fasta")
+    with open(outfile, 'w') as of:
+        SeqIO.write(dedup_records, of, "fasta")
+

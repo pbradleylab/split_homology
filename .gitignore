@@ -1,0 +1,5 @@
+*.swp
+logs/*
+*.dot
+.snakemake
+.Rproj.user
