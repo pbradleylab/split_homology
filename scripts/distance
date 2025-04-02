@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import argparse
+import pandas as pd
+from itertools import combinations as comb
+
+
+aparser = argparse.ArgumentParser(description=(" "))
+aparser.add_argument("-d", "--dataframe", help="Pickled dataframe containing hits data")
+aparser.add_argument('-o', "--out", help="Pickled dataframe file receiving location values")
+args = aparser.parse_args()
+
+
+hits = pd.read_pickle(args.dataframe)
+
+# Extract the genome type from the data frame columns.  Determined by samgenome step.
+dfcols = hits.columns
+if "src_genome" in dfcols:
+    print("Source genomes found")
+    genometype = "src_genome"
+elif "rep_genome" in dfcols:
+    print("Representative genomes found")
+    genometype = "rep_genome"
+elif "g" in dfcols:
+    print("Generic genomes found")
+    genometype = "g"
+else:
+    print("No genome type column found in data frame.")
+    sys.exit(1)
+
+
+hits = hits.group_by(["hum_protein", "g", "bac_protein", "contig", "strand", "featnum"]).first()
+
+# Add empty column to hold distance values. Hits against genes for which a distance cannot
+# be calculated will have NaN persist in this column.
+hits["dist_nearest"] = pd.Series()
+
+for hgrp in hits.groupby("hum_protein"):
+    print(hgrp[0])
+    sys.stdout.flush()
+    for ggrp in hgrp[1].groupby(genometype):
+        print(f"    {ggrp[0]}  {ggrp[1].shape[0]}")
+        sys.stdout.flush()
+        # If hits are from same contig, compute distances between all pairwise
+        # combinations of hits for this grouping. Keep the lowest value.
+        #print(ggrp[1])
+        for cgrp in ggrp[1].groupby("contig"):
+            for sgrp in cgrp[1].groupby("strand"):
+                if sgrp[1].shape[0] > 1:
+                    print(sgrp[1])
+                    print(f"        {sgrp[0]}  {sgrp[1].shape[0]}")
+                    indices = sgrp[1].index.values
+                    dists = []
+                    print("distances:")
+                    for com in comb(indices, 2):
+                        feat0 = sgrp[1].loc[[com[0]]]["featnum"].values[0]
+                        feat1 = sgrp[1].loc[[com[1]]]["featnum"].values[0]
+                        dist = abs(feat1-feat0)
+                        print(f"     {dist}")
+                        dists.append([dist,com])
+                    print(dists)
+                    # Sort list of distance:(idx0,idx1) items by distance value.
+                    dists.sort(key=lambda x: x[0])
+                    print(f"sorted distances:  {dists}")
+                    idxs_seen = []
+                    for dpair in dists:
+                        for idx in dpair[1]:
+                            if idx not in idxs_seen:
+                                print(f"row-> {idx} {dpair[0]}")
+                                idxs_seen.append(idx)
+                                hits.at[idx, "dist_nearest"] = dpair[0]
+
+# Remove all rows with NaN in dist_nearest column. These are lone hits with
+# no corresponding hit on the same contig/strand.
+hits = hits[ ~hits["dist_nearest"].isna() ]
+
+hits.to_pickle(args.out)

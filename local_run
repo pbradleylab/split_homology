@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+snakemake -s fusion_candidates.smk --stats logs/stats-$(date +%Y%m%d.%H%M) --use-conda ${@}

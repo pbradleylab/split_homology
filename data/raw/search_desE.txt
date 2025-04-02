@@ -1,0 +1,1 @@
+mmseqs easy-search desE.fa uhgp-90/uhgp-90.faa ../processed/desEsearch.m8 /fs/ess/scratch/PAS2276/desE/

@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import argparse
+import pickle
+import pandas as pd
+import polars as pl
+from glob import glob
+import gffutils
+from multiprocessing import Pool
+
+def expand(prot_val):
+    return f"GUT_GENOME{prot_val[0:6]}_{prot_val[6:]}"
+
+def expand_int(prot_int):
+    return expand(str(prot_int).zfill(11))
+
+def compact(prot_id):
+    return prot_id.replace("GUT_GENOME","").replace('_','')
+
+
+aparser = argparse.ArgumentParser(description=("Lookup location data; contig, feature #, "
+        "strand for each bacterial protein in the provided hits data. Merge the location "
+        "data found into the hits data passed in as 'dataframe'."))
+aparser.add_argument("-d", "--dataframe", help="IPC dataframe containing hits data")
+aparser.add_argument('-g', "--gffdir", required=True,
+        help="Directory containing UHGG source genome (GUT_GENOME) GFF files")
+aparser.add_argument('-c', "--convert",
+                     help=("Convert proteinID column instead of using bac_protein"),
+                     action="store_true")
+aparser.add_argument('-o', "--out", help="Pickled dataframe file receiving location values")
+args = aparser.parse_args()
+
+hits = pl.read_ipc(args.dataframe).to_pandas()
+
+
+if args.convert:
+    print("Using proteinIDs instead of clusterIDs...")
+    hits["bac_protein_unclust"] = hits["proteinID"].apply(expand_int)
+    pid_col = "bac_protein_unclust"
+else:
+    print("Using clusterIDs...")
+    pid_col = "bac_protein"
+
+print("Adding bac_prot_stub column")
+hits["bac_prot_stub"] = hits[pid_col].apply( lambda x: x.rsplit('_', 1)[0] )
+
+
+# Group hits by the genome prefix of each bacterial protein ID.
+# Read all features from the same contig as the protein ID
+# into a new dataframe
+# strand
+# contig
+# feature number
+#     for each and add to the data frame.
+
+def localize(idx, numgroups, subhits):
+    loca_vals = {pid_col:[], "contig":[], "featnum":[], "strand":[]}
+    genome = subhits["bac_prot_stub"].iloc[0]
+    protids = subhits[pid_col]
+    fpattern = f"{genome}.gff*"
+    gff_path = os.path.join(args.gffdir, fpattern)
+    gff = glob(gff_path)[0]
+    #print(f"{count}/{num_grps} - Reading GFF file: {gff}")
+    print(f"{idx}/{numgroups}  GFF file: {gff}")
+    sys.stdout.flush()
+    db = gffutils.create_db(str(gff), ":memory:")
+    # Store GFF data from select fields in a dataframe for easier querying.
+    # For performance, values stored in a dict, then used to create the dataframe.
+    #print("creating data frame")
+    fdf = pd.DataFrame(columns=["seqid", "ID", "start", "strand"])
+    fdf_vals = {"seqid":[], "ID":[], "start":[], "strand":[]}
+    for ft in db.all_features():
+        if ft.featuretype == "CDS":
+            fdf_vals["seqid"].append(ft.seqid)
+            fdf_vals["ID"].append(ft.id)
+            fdf_vals["start"].append(ft.start)
+            fdf_vals["strand"].append(ft.strand)
+    fdf = pd.DataFrame(fdf_vals)
+    #print("scanning protein IDs")
+    for protid in protids:
+        contig = fdf[ fdf["ID"] == protid ]["seqid"].iloc[0]
+        contigdf = fdf[ fdf["seqid"] == contig ]
+        contigdf = contigdf.reset_index(drop=True)
+        strand = fdf[ fdf["ID"] == protid ]["strand"].iloc[0]
+        # note: needed tweak to avoid deprecation
+        featnum = contigdf[ (contigdf["seqid"] == contig) & (contigdf["ID"] == protid) ].index.item()
+        featnum = int(featnum) + 1
+        #print(f"  found: {protid}, {contig}, {featnum}, {strand}")
+        loca_vals[pid_col].append(protid)
+        loca_vals["contig"].append(contig)
+        loca_vals["featnum"].append(featnum)
+        loca_vals["strand"].append(strand)
+    #count += 1
+    # Compose frame with all harvested location values
+    locations = pd.DataFrame(loca_vals)
+    locations = locations.drop_duplicates() # From duplicate bac_protein values in hits data
+    return locations
+
+
+stub_grps = hits.groupby("bac_prot_stub")
+groups = [stub_grps.get_group(x) for x in stub_grps.groups]
+numgroups = len(groups)
+all_numgroups = [numgroups for i in range(0,numgroups)]
+funcargs = zip(range(0,numgroups), all_numgroups, groups)
+
+try:
+    nthreads = int(os.environ['POLARS_MAX_THREADS'])
+except KeyError:
+    nthreads = 1
+pool = Pool(processes = nthreads)
+location_data = pool.starmap(localize, funcargs)
+pool.close()
+
+# Assemble processed groups into single data frame
+locdata = pd.DataFrame()
+for frame in location_data:
+    locdata = locdata._append(frame)
+locdata = locdata.reset_index(drop=True)
+
+hits = hits.merge(locdata, how="left", on=pid_col)
+if args.out.endswith(".pkl"):
+    hits.to_pickle(args.out)
+elif args.out.endswith(".ipc"):
+    pl.from_pandas(hits).write_ipc(args.out)
+else:
+    raise ValueError

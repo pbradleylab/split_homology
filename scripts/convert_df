@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import polars as pl
+import argparse
+
+# Read in data frame and write out as the requested format.
+
+aparser = argparse.ArgumentParser(description=("Convert a data file from one format to another."))
+aparser.add_argument('-i', "--input", required=True,
+    help="Pickled data frame containing filtered search hits.")
+aparser.add_argument('-o', "--output", required=True,
+    help="Output filename")
+aparser.add_argument('-f', "--format", help="Format to write")
+args = aparser.parse_args()
+
+sepchar = ','
+if args.format.lower() == "tsv":
+    sepchar = '\t'
+
+if args.input.endswith(".ipc"):
+    df = pl.scan_ipc(args.input)
+    df.collect(streaming=True).write_csv(args.output, separator=sepchar)
+elif args.input.endswith(".pkl"):
+    df = pd.read_pickle(args.input)
+    df.to_csv(args.output, index=False, sep=sepchar)
+else:
+    raise ValueError
