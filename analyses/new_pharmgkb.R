@@ -69,11 +69,15 @@ split_proteins <- pgkb_split %>% filter(nPart > nFull) %>% group_by(Controller, 
 all_proteins <- pgkb_split %>% group_by(Controller, uniprot_ids, nPart, nFull) %>% nest() %>% arrange(-nPart) %>% mutate(From = map_chr(data, ~ paste0(unique(.x$From), collapse=";")))
 
 
-write_csv(split_proteins %>% select(-data), "Table3.csv")
-write_csv(full_proteins %>% select(-data) %>% arrange(-nFull), "SuppTable3.csv")
+write_csv(split_proteins %>% select(-data), "Table4.csv")
+write_csv(full_proteins %>% select(-data) %>% arrange(-nFull), "SuppTable9.csv")
 
 pgkb_drugs <- pgkb_split %>% mutate(Drugs = map2_chr(Drugs, From, ~ { if (is.na(.x)) .y else .x }))
 
+n_distinct_drugs_mfull <- pgkb_split %>% filter(nFull>nPart) %>% select(Drugs) %>% filter(!is.na(Drugs)) %>% separate_longer_delim(Drugs, delim=", ") %>% distinct()
+print(n_distinct_drugs_mfull)
+n_distinct_drugs_msplit <- pgkb_split %>% filter(nFull<nPart) %>% select(Drugs) %>% filter(!is.na(Drugs)) %>% separate_longer_delim(Drugs, delim=", ") %>% distinct()
+print(n_distinct_drugs_msplit)
 
 
 # What classes?
@@ -141,8 +145,7 @@ all_xeno_count <- all_xeno_cat %>%
   count() %>%
   arrange(-n)
 
-
-####
+left_join(full_xeno_count, all_xeno_count, by="xeno_class") %>% mutate(enr = n.x/n.y) %>% arrange(enr)
 
 pgkb_drugs <- pgkb_split %>% mutate(Drugs = map2_chr(Drugs, From, ~ { if (is.na(.x)) .y else .x })) %>% left_join(., select(all_xeno_cat, uniprot_ids, xeno_class))
 
@@ -166,5 +169,5 @@ pgkb_FH_drugs <- full_best %>%
   relocate(Drugs, .before=Entry) %>%
   arrange(Drugs, Lineage, nGenomes) %>%
   select(Drugs, From, To, Lineage, nGenomes, xeno_class, `Entry Name`, Entry, bac_protein, pident, length)
-
 write_csv(pgkb_FH_drugs, "pgkb_FH_drugs.csv")
+

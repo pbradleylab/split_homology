@@ -2,6 +2,7 @@
 
 import sys
 import os
+import shutil
 import argparse
 import pickle
 import pandas as pd
@@ -24,6 +25,9 @@ aparser.add_argument('-c', "--coverage_full",
 aparser.add_argument('-I', "--IPC",
                      help=("Dataset is in IPC mode, not pickled"),
                      action="store_true")
+aparser.add_argument('-P', "--prewrite",
+                     help=("Write first to a temporary directory then copy (sometimes helps with network storage)"),
+                     default="")
 aparser.add_argument('-G', "--group_mode",
                      help=("Calculate hum_cover over groups"),
                      action="store_true")
@@ -38,6 +42,9 @@ aparser.add_argument('-m', "--minbaclength",
                      type=int,
                      default=80,
                      help="Minimum length of a bacterial protein to be counted")
+aparser.add_argument('-v', "--verbose",
+                     help="Increase verbosity (helpful for debugging)",
+                     action="store_true")
 args = aparser.parse_args()
 
 mincount = 1
@@ -78,61 +85,11 @@ else:
     print("No genome type column found in data frame.")
     sys.exit(1)
 
-
 # Figure out which columns to retain
 
-result_selection = ["hum_protein", genometype, "sstart", "send"]
+result_selection = ["hum_protein", genometype, "sstart", "send", "indiv_humcover"]
 if args.group_mode:
     result_selection.append("groupnum")
-
-# For these purposes, we only care about the intervals covering human proteins,
-# so we can collapse down all the bacterial proteins for now. Also take this
-# time to get rid of very small bacterial proteins and cases where there are too
-# few remaining counts
-
-print("Filtering results...")
-resultsF = results.filter(
-    pl.col("length_bac") >= args.minbaclength
-).with_columns(
-    count = pl.col("bac_protein").count().over(["hum_protein", genometype])
-).filter(
-    pl.col("count") >= mincount
-).select(
-    result_selection
-).unique()
-
-# Sort by starting and ending location within each hum_protein/genome pair.
-# Then, shift the ending location down one so we can find the running maximum.
-# If an sstart is ahead of the last running maximum, it's a new interval.
-# Getting the cumulative sum over the booleans of "new interval" gives you an
-# interval group per hum_protein/genome pair.
-print("Computing intervals...")
-intervals = resultsF.sort("hum_protein", genometype, "sstart","send").with_columns(
-    last_send=pl.col("send").shift(fill_value=0).over(["hum_protein", genometype])
-).with_columns(
-    running_max = pl.max_horizontal("send","last_send")
-).with_columns(
-    last_running_max=pl.col("running_max").shift(fill_value=0).over(["hum_protein", genometype])
-).with_columns(
-    interval_group = (pl.col("sstart") > pl.col("running_max").shift(fill_value=0)).cum_sum().over(["hum_protein", genometype])
-)
-
-# Now summarize first each interval group (collapsing to min and max), then each
-# distinct interval (since we now know these don't overlap) to get the total length
-print("Tallying intervals...")
-
-# If this is the second pass, we've organized our results into groups
-if args.group_mode:
-    totlength_groups = ["hum_protein", genometype, "groupnum"]
-else:
-    totlength_groups = ["hum_protein", genometype]
-
-total_length = intervals.group_by(totlength_groups + ["interval_group"]).agg(
-    length=pl.col("send").max() - pl.col("sstart").min()
-).group_by(totlength_groups).agg(
-    tot_length=pl.col("length").sum()
-)
-
 
 # Read in FASTA file to get human protein lengths
 print("Reading in FASTA...")
@@ -144,33 +101,92 @@ for rec in SeqIO.parse(hprot_seqs, "fasta"):
     lengths.append(len(rec.seq))
 hseqs = pl.DataFrame({"hum_protein": ids, "length_hum": lengths}, schema={"hum_protein": pl.Utf8, "length_hum": pl.UInt64})
 
-# Join together with results
-print("Computing totals...")
-total_humcover = total_length.join(hseqs, on="hum_protein", how="left").with_columns(
-    tot_humcover = pl.col("tot_length") / pl.col("length_hum")
-)
-
-# Now get "best" individual humcover
+# Calculate human coverage per individual hit
 
 print("Computing individual totals...")
-indiv_humcover = resultsF.with_columns(
+results=results.with_columns(
     indiv_length = pl.col("send") - pl.col("sstart")
 ).join(
     hseqs, on="hum_protein", how="left"
 ).with_columns(
     indiv_humcover = pl.col("indiv_length") / pl.col("length_hum")
-).group_by(["hum_protein", genometype]).agg(
-    best_indiv_humcover = pl.col("indiv_humcover").max()
 )
+if (args.verbose):  print(results)
 
-overall = indiv_humcover.join(total_humcover, on=["hum_protein", genometype], how="inner")
+# For these purposes, we only care about the intervals covering human proteins,
+# so we can collapse down all the bacterial proteins for now. Also take this
+# time to get rid of very small bacterial proteins and cases where there are too
+# few remaining counts. Finally, remove entries that are individually "too long"
 
-print("Getting final results...")
+print("Filtering results...")
+minbaclength=args.minbaclength
+
 if fullcover:
-    overallF = overall.filter(
-        pl.col("best_indiv_humcover") >= cov_fraction
+    final_results = results.filter(
+        pl.col("length_bac") >= minbaclength
+    ).filter(
+        pl.col("indiv_humcover") >= cov_fraction
+    ).with_columns(
+        best_indiv_humcover=pl.col("indiv_humcover"),
+        tot_humcover=pl.col("indiv_humcover"),
+        tot_length = pl.col("indiv_length")
+    ).unique()
+    if (args.verbose):  print(final_results)
+else: # Partial coverage
+    resultsF = results.filter(
+        pl.col("length_bac") >= minbaclength
+    ).filter(
+        pl.col("indiv_humcover") < cov_fraction
+    ).with_columns(
+        count = pl.col("bac_protein").count().over(["hum_protein", genometype])
+    ).filter(
+        pl.col("count") >= mincount
+    ).select(
+        result_selection
+    ).unique()
+    if (args.verbose):  print(resultsF)
+    # Sort by starting and ending location within each hum_protein/genome pair.
+    # Then, find the running maximum of the end ("send") locations.
+    # If an sstart is ahead of the last running maximum, it's a new interval.
+    # Getting the cumulative sum over the booleans of "new interval?" gives you an
+    # interval group per hum_protein/genome pair.
+    print("Computing intervals...")
+    intervals = resultsF.sort("hum_protein", genometype, "sstart","send").with_columns(
+            running_max = pl.col("send").cum_max().over(["hum_protein", genometype])
+    ).with_columns(
+        interval_group = (pl.col("sstart") > pl.col("running_max").shift(fill_value=0)).cum_sum().over(["hum_protein", genometype])
     )
-else:
+    if (args.verbose):  print(intervals)
+    # Now summarize first each interval group (collapsing to min and max), then each
+    # distinct interval (since we now know these don't overlap) to get the total length
+    print("Tallying intervals...")
+    # If this is the second pass, we've organized our results into groups that we want to preserve
+    if args.group_mode:
+        totlength_groups = ["hum_protein", genometype, "groupnum"]
+    else:
+        totlength_groups = ["hum_protein", genometype]
+    total_length = intervals.group_by(totlength_groups + ["interval_group"]).agg(
+        length=pl.col("send").max() - pl.col("sstart").min()
+    ).group_by(totlength_groups).agg(
+        tot_length=pl.col("length").sum()
+    )
+    if (args.verbose):  print(total_length)
+    total_humcover = total_length.join(hseqs, on="hum_protein", how="left").with_columns(
+        tot_humcover = pl.col("tot_length") / pl.col("length_hum")
+    )
+    if (args.verbose):  print(total_humcover)
+    # Now get "best" individual humcover
+    indiv_humcover = resultsF.group_by(["hum_protein", genometype]).agg(
+        best_indiv_humcover = pl.col("indiv_humcover").max()
+    )
+    if (args.verbose):  print(indiv_humcover)
+    overall = indiv_humcover.join(total_humcover, on=["hum_protein", genometype], how="inner")
+    if (args.verbose):  print(overall)
+    if (args.verbose):  print(overall.with_columns(indiv_covdiff=pl.col("tot_humcover")-pl.col("best_indiv_humcover")).select(pl.max("indiv_covdiff")))
+    if (args.verbose):  print(overall.select(pl.min("best_indiv_humcover")))
+    if (args.verbose):  print(overall.select(pl.max("tot_humcover")))
+
+    print("Getting final results...")
     # Merge two analyses, then filter for cases where total humcover is over
     # covdiff% more than best_indiv_humcover, humcover is at least cov_fraction, and
     # best_indiv_humcover is less than cov_fraction
@@ -180,11 +196,37 @@ else:
         (pl.col("tot_humcover") - covdiff) > pl.col("best_indiv_humcover")
     )
 
+    if (args.verbose):  print(overallF)
+    # Keep only non-redundant columns or columns used for matching
+    overall_selection = ["hum_protein", genometype, "tot_humcover", "tot_length", "best_indiv_humcover"]
+    if args.group_mode:
+        overall_selection.append("groupnum")
+    overallF = overallF.select(
+        overall_selection
+    )
+    if (args.verbose):  print(overallF)
 
-# Prune original results to only keep entries in overallF
+    # Prune original results to only keep entries in overallF
+    if args.group_mode:
+        final_results = results.join(overallF, on=["hum_protein", genometype, "groupnum"], how="inner")
+    else:
+        final_results = results.join(overallF, on=["hum_protein", genometype], how="inner")
+    if (args.verbose):  print(final_results)
+
+# Write output
+
 print("Writing results...")
-if args.group_mode:
-    final_results = results.join(overallF, on=["hum_protein", genometype, "groupnum"], how="inner")
+if args.prewrite=="":
+    final_results.write_ipc(args.outfile)
 else:
-    final_results = results.join(overallF, on=["hum_protein", genometype], how="inner")
-final_results.write_ipc(args.outfile)
+    os.makedirs(args.prewrite, exist_ok=True)
+    intermediate_file=os.path.join(args.prewrite, os.path.basename(args.outfile))
+    final_results.write_ipc(intermediate_file)
+    shutil.copy(intermediate_file, args.outfile)
+    os.remove(intermediate_file)
+
+# finally, test that output saved properly
+test = pl.scan_ipc(args.outfile)
+test_len = test.select(pl.count()).collect().item()
+actual_len = final_results.select(pl.count()).item()
+if (test_len != actual_len): raise Exception("Something went wrong writing to disk; results may not be trustworthy")

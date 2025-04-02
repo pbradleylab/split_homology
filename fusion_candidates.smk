@@ -3,9 +3,8 @@ import os
 from snakemake.utils import min_version
 min_version("6.15.5")
 
-#himem_slurm_partition = "mib"
 himem_slurm_partition = "hugemem"
-medmem_slurm_partition = "largemem"
+medmem_slurm_partition = "cpu"
 
 # These rules will run on the same node from which the workflow is invoked
 # (the login node) since compute nodes cannot access the internet to get data sets.
@@ -19,7 +18,7 @@ BAC_OVERLAPS = ['0.5', '0.67', '0.75']
 GENOME_TYPES = ['src']
 #COVERAGES = ['part70', 'part80', 'full']
 PARTCOVERAGES = ['part60', 'part70', 'part80']
-FULLCOVERAGES = ['part60', 'full70', 'full80']
+FULLCOVERAGES = ['full60', 'full70', 'full80']
 COVERAGES = PARTCOVERAGES + FULLCOVERAGES
 #HITS_THRESHOLDS = ['all', 20000]   # Applied at 'samegenome' step to limit runtime
 HITS_THRESHOLDS = [20000]   # Applied at 'samegenome' step to limit runtime
@@ -54,19 +53,31 @@ rule all:
             thresh=HITS_THRESHOLDS,
             length=[x for x in COVERAGES]),
 
+        expand("data/processed/humcover3/{targetset}_{bac_overlap}_{genometype}_{thresh}_{length}/part_humcover3.ipc",
+            bac_overlap=BAC_OVERLAPS,
+            targetset=TARGETS,
+            genometype=GENOME_TYPES,
+            thresh=HITS_THRESHOLDS,
+            length=[x[-2:] for x in PARTCOVERAGES]),
+        expand("data/processed/humcover3/{targetset}_{bac_overlap}_{genometype}_{thresh}_{length}/full_humcover3.ipc",
+            bac_overlap=BAC_OVERLAPS,
+            targetset=TARGETS,
+            genometype=GENOME_TYPES,
+            thresh=HITS_THRESHOLDS,
+            length=[x[-2:] for x in FULLCOVERAGES]),
 
 
 # Locally executed data download rules
 
-# rule get_uhgp90_data:
-#     output: "data/raw/uhgp-90/uhgp-90.faa",
-#             "data/raw/uhgp-90/uhgp-90.tsv",
-#             "data/raw/uhgp-90/uhgp-90_eggNOG.tsv",
-#     params: url = "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/v1.0/uhgp_catalogue/uhgp-90.tar.gz"
-#     shell:
-#         "cd data/raw; "
-#         "curl -O {params.url}; "
-#         "tar zxvf uhgp-90.tar.gz"
+rule get_uhgp90_data:
+    output: "data/raw/uhgp-90/uhgp-90.faa",
+            "data/raw/uhgp-90/uhgp-90.tsv",
+            "data/raw/uhgp-90/uhgp-90_eggNOG.tsv",
+    params: url = "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/v1.0/uhgp_catalogue/uhgp-90.tar.gz"
+    shell:
+        "cd data/raw; "
+        "curl -O {params.url}; "
+        "tar zxvf uhgp-90.tar.gz"
 
 
 # Locally executed rule
@@ -176,8 +187,8 @@ rule samegenome:
     threads: 20
     resources:
         # partition = himem_slurm_partition,
-        time = "24:00:00",
-        mem_mb = 172000
+        time = "1:00:00",
+        mem_mb = 224000
     run:
         thresh_flag = ""
         if wildcards.thresh != "all":
@@ -199,7 +210,7 @@ rule humcover:
     output: "data/processed/humcover/{targetset}/{targetset}_{bac_overlap}_{genometype}_{thresh}_{length}_humcover.ipc",
     threads: 20
     resources:
-        mem_mb = 128000
+        mem_mb = 192000
     run:
         coverage_flag = ""
         part_percent_flag = f"-p {wildcards.length[-2:]} " # changed logic to allow customization of threshold
@@ -224,7 +235,7 @@ rule location_part:
     output:
         "data/processed/location/{targetset}/{targetset}_{bac_overlap}_{genometype}_{thresh}_part{length}_location.ipc",
     resources:
-        mem_mb = 32000
+        mem_mb = 64000
     threads: 8
     run:
         shell("POLARS_MAX_THREADS={threads} scripts/localize_hits -d {input.data} -g {input.gffdir} -o {output}")

@@ -72,7 +72,7 @@ dset = pl.read_ipc(os.path.join(args.arrowmap, "clusterG*/*"),
 print(f" -- Dataset read in...")
 print(f" -- Memory usage: {process.memory_info().rss}")
 
-print(f" -- Filtering and writing to {outfile}...")
+print(f" -- Filtering and writing to {args.outfile}...")
 # Now filter only cases with at least one bac_protein hit per genome and write to disk
 # (Note, we will later filter for cases where there are multiple hits)
 dset.select(
@@ -85,7 +85,7 @@ dset.select(
     .over(["hum_protein", "g"])
 ).filter(
     pl.col("count") >= args.minimum_per_genome
-).write_ipc(outfile)
+).write_ipc(args.outfile)
 
 print(f" -- Finished!")
 print(f" -- Memory usage: {process.memory_info().rss}")
