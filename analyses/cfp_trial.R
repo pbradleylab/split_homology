@@ -71,13 +71,13 @@ split_cmp <- overall_results %>% select(-type) %>% distinct() %>% mutate(paramse
 write_csv(split_cmp, "sensitivity_analysis_table.csv")
 
 full_comparison <- overall_results %>% filter(nFull > nPart) %>% select(-type) %>% distinct() %>% group_by(Entry, `Entry Name`) %>% summarize(n_paramsets=n(), median_nFull = median(nFull), median_nPart =median(nPart), found="HumanUPR_0.67_src_20000_70" %in% paramset) %>% ungroup()
-full_comparison_2 <- left_join(full_comparison, full_compare_f, by=c("Entry", "Entry Name"))
+full_comparison_2 <- left_join(full_comparison, full_compare_f, by=c("Entry", "Entry Name"))%>% arrange(desc(found), desc(n_paramsets), desc(median_nFull))
 write_csv(full_comparison_2, "SuppTable2.csv")
 full_summary <- full_comparison %>% group_by(found, n_paramsets) %>% count
 write_csv(full_summary, "full_summary.csv")
 
 split_comparison <- overall_results %>% filter(nFull < nPart) %>% select(-type) %>% distinct() %>% group_by(Entry, `Entry Name`) %>% summarize(n_paramsets=n(), median_nFull = median(nFull), median_nPart =median(nPart), found="HumanUPR_0.67_src_20000_70" %in% paramset) %>% ungroup()
-split_comparison_2 <- left_join(split_comparison, split_compare_f, by=c("Entry", "Entry Name"))
+split_comparison_2 <- left_join(split_comparison, split_compare_f, by=c("Entry", "Entry Name")) %>% arrange(desc(found), desc(n_paramsets), desc(median_nPart))
 write_csv(split_comparison, "SuppTable1.csv")
 split_summary <- split_comparison %>% group_by(found, n_paramsets) %>% count
 write_csv(split_summary, "split_summary.csv")
